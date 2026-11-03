@@ -2,10 +2,10 @@
 
 Windows + Edge，Python 3.10+。用于将本人选定的畅捷通好生意账套会话存入指定云平台。平台访问密钥需要 connections:manage 权限。云端会在保存前进行校验。用户可以通过工作台管理已绑定的连接。
 
-    python -m pip install playwright requests
+    python -m pip install playwright requests psutil
     python skills/hsy-shadow/bind.py --existing
 
-日常浏览器需已提供本机调试入口，普通默认配置通常无法直接接入。此时运行以下命令并在独立窗口登录。
+日常浏览器需已提供本机调试入口，普通默认配置通常无法直接接入。此时运行以下命令并在独立窗口登录。工具以独立临时配置普通启动 Edge，验证本进程的回环调试端口后连接默认浏览器上下文；结束时关闭该窗口并清理临时配置。
 
     python skills/hsy-shadow/bind.py
 
@@ -17,6 +17,6 @@ Agent 操作说明位于 skills/hsy-shadow/SKILL.md。需要本地运行能力�
 
 先在同一个 Python 环境安装依赖：
 
-    python -m pip install "mcp>=1.12,<2" playwright requests
+    python -m pip install "mcp>=1.12,<2" playwright requests psutil
 
 插件宿主应将 .mcp.json 中插件根目录占位符解析为本地安装目录。如果宿主不支持该占位符，直接将本地 stdio MCP 命令配置为 python，参数为 shadow_mcp.py 的绝对路径。Agent 调用 hsy_binding_guide 获取本地工作目录、绑定命令、续期和成功条件。用户在本地终端确认上传。

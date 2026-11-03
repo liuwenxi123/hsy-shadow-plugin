@@ -59,3 +59,36 @@ def test_cancel_does_not_post(monkeypatch):
     with pytest.raises(SystemExit, match="取消"):
         bind.main()
     post.assert_not_called()
+
+
+def test_owned_edge_default_context_cleanup(monkeypatch):
+    import os
+    import pytest
+    import psutil
+    import normal_edge
+    if os.name != "nt":
+        pytest.skip("Windows Edge integration")
+    try:
+        normal_edge.edge_executable()
+    except RuntimeError:
+        pytest.skip("Edge missing")
+
+    observed = {}
+    original = normal_edge.owned_endpoint
+    def inspect_endpoint(process, profile):
+        endpoint = original(process, profile)
+        observed.update(process=process, profile=profile, endpoint=endpoint)
+        assert profile.is_dir()
+        assert str(profile) in " ".join(psutil.Process(process.pid).cmdline())
+        assert endpoint.startswith("http://127.0.0.1:")
+        return endpoint
+    monkeypatch.setattr(normal_edge, "owned_endpoint", inspect_endpoint)
+
+    with sync_playwright() as pw:
+        with normal_edge.normal_edge_page(pw) as page:
+            assert page.context == page.context.browser.contexts[0]
+            assert page.url == "about:blank"
+            page.set_content("<title>owned Edge</title>")
+            assert page.title() == "owned Edge"
+    assert observed["process"].poll() is not None
+    assert not observed["profile"].exists()

@@ -1,6 +1,6 @@
 {
   "name": "hsy-shadow",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Import a user-selected Chanjet HSY ledger session into the owner's cloud connection.",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json"
