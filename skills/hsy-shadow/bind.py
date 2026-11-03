@@ -11,7 +11,7 @@ from pathlib import Path
 import requests
 from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
-from normal_edge import normal_edge_page
+from normal_chromium import normal_chromium_page
 
 DEST = "https://134.175.43.116/data/v2/connections/session"
 LEDGER = re.compile(r"(https://cloud[0-9]*\.chanjet\.com/hsy/[A-Za-z0-9]+/[A-Za-z0-9]+/)")
@@ -123,7 +123,7 @@ def main():
         raise SystemExit("需要用户在本地交互终端选择账套并确认。")
 
     with sync_playwright() as pw:
-        pages = nullcontext(existing_page(pw)) if args.existing else normal_edge_page(pw)
+        pages = nullcontext(existing_page(pw)) if args.existing else normal_chromium_page(pw)
         with pages as page:
             payload = capture(page, args.existing)
     print("账套:", payload["business_url"], "目的地:", DEST, "连接:", args.connection_id or "新建")

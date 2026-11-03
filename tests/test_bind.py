@@ -61,34 +61,57 @@ def test_cancel_does_not_post(monkeypatch):
     post.assert_not_called()
 
 
-def test_owned_edge_default_context_cleanup(monkeypatch):
+def test_owned_chromium_default_context_cleanup(monkeypatch):
     import os
     import pytest
     import psutil
-    import normal_edge
+    import normal_chromium as launcher
     if os.name != "nt":
-        pytest.skip("Windows Edge integration")
-    try:
-        normal_edge.edge_executable()
-    except RuntimeError:
-        pytest.skip("Edge missing")
-
+        pytest.skip("Windows Chromium integration")
     observed = {}
-    original = normal_edge.owned_endpoint
-    def inspect_endpoint(process, profile):
-        endpoint = original(process, profile)
+    original = launcher.owned_endpoint
+    def inspect_endpoint(process, port):
+        args = psutil.Process(process.pid).cmdline()
+        profile = Path(next(arg.split("=",1)[1] for arg in args if arg.startswith("--user-data-dir=")))
+        assert "--window-size=1280,900" in args
+        assert f"--remote-debugging-port={port}" in args and port > 0
+        endpoint = original(process, port)
         observed.update(process=process, profile=profile, endpoint=endpoint)
         assert profile.is_dir()
         assert str(profile) in " ".join(psutil.Process(process.pid).cmdline())
         assert endpoint.startswith("http://127.0.0.1:")
         return endpoint
-    monkeypatch.setattr(normal_edge, "owned_endpoint", inspect_endpoint)
+    monkeypatch.setattr(launcher, "owned_endpoint", inspect_endpoint)
 
     with sync_playwright() as pw:
-        with normal_edge.normal_edge_page(pw) as page:
+        with launcher.normal_chromium_page(pw) as page:
             assert page.context == page.context.browser.contexts[0]
+            assert page.context.browser.version == "153.0.8010.12"
             assert page.url == "about:blank"
             page.set_content("<title>owned Edge</title>")
             assert page.title() == "owned Edge"
     assert observed["process"].poll() is not None
     assert not observed["profile"].exists()
+
+
+def test_missing_configured_browser_fails_with_install_help(monkeypatch, tmp_path):
+    import pytest
+    import normal_chromium as launcher
+    monkeypatch.setenv("HSY_BROWSER_EXECUTABLE", str(tmp_path / "absent.exe"))
+    monkeypatch.setenv("HSY_BROWSER_VERSION", launcher.BROWSER_VERSION)
+    with pytest.raises(SystemExit, match="playwright install chromium"):
+        launcher.chromium_executable(None)
+
+
+def test_wrong_running_browser_rejected(monkeypatch):
+    import os
+    import pytest
+    import normal_chromium as launcher
+    if os.name != "nt":
+        pytest.skip("Windows Chromium integration")
+    with sync_playwright() as pw:
+        monkeypatch.setattr(launcher, "BROWSER_VERSION", "0.0.0.0")
+        monkeypatch.delenv("HSY_BROWSER_VERSION", raising=False)
+        with pytest.raises(SystemExit, match="实际浏览器版本"):
+            with launcher.normal_chromium_page(pw):
+                pytest.fail("Wrong browser version accepted")
