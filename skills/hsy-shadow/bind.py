@@ -6,10 +6,9 @@ import re
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import requests
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
 DEST = "https://134.175.43.116/data/v2/connections/session"
 LEDGER = re.compile(r"(https://cloud[0-9]*\.chanjet\.com/hsy/[A-Za-z0-9]+/[A-Za-z0-9]+/)")
@@ -30,35 +29,83 @@ def existing_page(pw):
                  if p.url.startswith(SITE) or LEDGER.match(p.url)]
         if len(pages) == 1:
             return pages[0]
-    raise SystemExit("未发现唯一可接入的好生意页面。请使用独立登录模式。")
+        if pages:
+            for index, page in enumerate(pages, 1):
+                match = LEDGER.match(page.url)
+                print(index, match[1] if match else SITE)
+            choice = input("请选择好生意标签页序号，直接回车取消：").strip()
+            if choice not in {str(i) for i in range(1, len(pages) + 1)}:
+                raise SystemExit("已取消，未上传。")
+            return pages[int(choice) - 1]
+    raise SystemExit("未发现可接入的好生意页面。请使用独立登录模式。")
 
 
-def capture(page, attached):
+def ledger_pages(root):
+    """Consider only the chosen tab and windows transitively opened by it."""
+    choices = []
+    for page in root.context.pages:
+        ancestor = page
+        while ancestor is not None and ancestor != root:
+            ancestor = ancestor.opener()
+        if ancestor != root or page.is_closed():
+            continue
+        if not (page.url.startswith(SITE) or LEDGER.match(page.url)):
+            continue
+        ledgers = set()
+        for frame in page.frames:
+            match = LEDGER.match(frame.url)
+            if match:
+                ledgers.add(match[1])
+        choices.extend((page, ledger) for ledger in sorted(ledgers))
+    return choices
+
+
+def capture(root, attached):
+    if not attached:
+        root.goto(SITE, wait_until="domcontentloaded")
+    input("请在该窗口或它打开的子窗口进入目标账套，然后在此按回车选择。")
+    # Synchronous stdin paused Playwright dispatch while the user opened the ledger.
+    try:
+        root.wait_for_timeout(100)
+    except PlaywrightError:
+        if not root.is_closed():
+            raise
+    choices = ledger_pages(root)
+    if not choices:
+        raise SystemExit("未发现可绑定的账套页面，请先进入目标账套。")
+    for index, (_, ledger) in enumerate(choices, 1):
+        print(index, ledger)
+    selection = input("输入要绑定的账套序号，直接回车取消：").strip()
+    if selection not in {str(i) for i in range(1, len(choices) + 1)}:
+        raise SystemExit("已取消，未上传。")
+    page, selected = choices[int(selection) - 1]
+    page.bring_to_front()
     session = {}
+
     def observe(req):
-        match = LEDGER.match(req.url)
-        if not match or req.resource_type not in ("fetch", "xhr"):
+        if session or not req.url.startswith(selected) or req.resource_type not in ("fetch", "xhr"):
             return
-        # Limit capture to the visible ledger or its same-site embedded frame.
-        frame = req.frame
-        if not frame or frame.page != page or not (LEDGER.match(page.url) or page.url.startswith(SITE)):
+        if not (page.url.startswith(SITE) or page.url.startswith(selected)):
             return
-        if not (frame.url.startswith(match[1]) or page.url.startswith(match[1])):
+        try:
+            frame = req.frame
+            if frame.page != page or not frame.url.startswith(selected):
+                return
+            headers = req.all_headers()
+        except Exception:
             return
-        headers = req.all_headers()
         auth = headers.get("authorization", "")
-        if auth.startswith("Bearer "):
-            session.update(business_url=match[1], authorization=auth, cookie=headers.get("cookie", ""))
+        if auth.startswith("Bearer ") and auth[7:].strip():
+            session.update(business_url=selected, authorization=auth, cookie=headers.get("cookie", ""))
+
     page.on("request", observe)
     try:
-        if not attached:
-            page.goto(SITE, wait_until="domcontentloaded")
-        print("请在此页面进入目标账套并打开商品分类等只读页面。")
+        print("请在所选账套打开商品分类等只读页面。")
         deadline = time.monotonic() + 300
         while not session and not page.is_closed() and time.monotonic() < deadline:
             page.wait_for_timeout(250)
         if not session:
-            raise SystemExit("未捕获目标账套的业务授权。")
+            raise SystemExit("未捕获所选账套的业务授权。")
         return session
     finally:
         page.remove_listener("request", observe)
@@ -69,13 +116,16 @@ def main():
     parser.add_argument("--existing", action="store_true")
     parser.add_argument("--connection-id")
     args = parser.parse_args()
-    token = os.getenv("HSY_PLATFORM_TOKEN") or getpass.getpass("本人云平台访问密钥: ")
+    if not sys.stdin.isatty():
+        raise SystemExit("需要用户在本地交互终端选择账套并确认。")
+
     with sync_playwright() as pw:
         page = existing_page(pw) if args.existing else pw.chromium.launch(channel="msedge", headless=False).new_page()
         payload = capture(page, args.existing)
     print("账套:", payload["business_url"], "目的地:", DEST, "连接:", args.connection_id or "新建")
     if input("允许云端保存本次会话并代查此账套？输入 YES 确认: ").strip() != "YES":
         raise SystemExit("已取消，未上传。")
+    token = os.getenv("HSY_PLATFORM_TOKEN") or getpass.getpass("本人云平台访问密钥: ")
     payload.update(provider="hsy", label="好生意影子连接")
     if args.connection_id:
         payload["connection_id"] = args.connection_id
@@ -86,6 +136,8 @@ def main():
     result = response.json()
     if result.get("status") != "ready" or not result.get("connection_id"):
         raise SystemExit("云端未确认连接就绪。")
+    if args.connection_id and args.connection_id != result["connection_id"]:
+        raise SystemExit("云端返回了不同的连接 ID，请检查本人连接状态。")
     print("ready", result["connection_id"])
 
 
