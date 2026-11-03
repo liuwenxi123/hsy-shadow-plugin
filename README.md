@@ -1,26 +1,22 @@
 # 好生意影子插件
 
-Windows + Chromium 153.0.8010.12，Python 3.10+。用于将本人选定的畅捷通好生意账套会话存入指定云平台。平台访问密钥需要 connections:manage 权限。云端会在保存前进行校验。用户可以通过工作台管理已绑定的连接。
+Windows，Python 3.10+，Chromium 153.0.8010.12。Agent 启动网页登录，用户自行登录好生意并选择企业，插件自动绑定首个进入的账套，将其会话发送至本人云平台以便代查。
 
-    python -m pip install playwright==1.63.0 requests psutil
-    python skills/hsy-shadow/bind.py --existing
-
-日常浏览器需已提供本机调试入口，普通默认配置通常无法直接接入。此时运行以下命令并在独立窗口登录。工具以独立临时配置以 1280×900 窗口普通启动指定版本 Chromium，验证本进程的回环调试端口后连接默认浏览器上下文；结束时关闭该窗口并清理临时配置。
-
-    python -m playwright install chromium
-    python skills/hsy-shadow/bind.py
-
-可使用 HSY_BROWSER_EXECUTABLE 指向既有同版本程序。连接后检查浏览器实际报告版本，版本不符即退出。
-更新原连接时追加 --connection-id 原连接ID。程序仅在本次运行内采集选中页面的好生意账套地址、Bearer 及该请求携带的 Cookie，终端确认后发送到固定 HTTPS 接口。上传的会话具备该账套登录态的权限。程序不会上传平台以外的浏览器资料。支持的资源范围以云端连接目录为准。
-
-Agent 操作说明位于 skills/hsy-shadow/SKILL.md。需要本地运行能力和可与用户交互的终端。
-
-## 本地 MCP 接入
-
-先在同一个 Python 环境安装依赖：
+安装依赖和指定浏览器。
 
     python -m pip install "mcp>=1.12,<2" playwright==1.63.0 requests psutil
+    python -m playwright install chromium
 
-插件宿主应将 .mcp.json 中插件根目录占位符解析为本地安装目录。如果宿主不支持该占位符，直接将本地 stdio MCP 命令配置为 python，参数为 shadow_mcp.py 的绝对路径。Agent 调用 hsy_binding_guide 获取本地工作目录、绑定命令、续期和成功条件。用户在本地终端确认上传。
+Agent 从已认证的云端服务领取受限一次性票据，通过子进程环境 HSY_BIND_TICKET 传递。
 
-使用 python bind.py --platform-login 可在确认上传后，通过本地终端输入平台用户名与隐藏密码，取得本次导入授权。导入结束或失败均尝试退出本次平台登录；撤销未确认时终端提示检查。平台密码只发送到 https://ivanc.wang/auth/login，不应交给 Agent。已有 HSY_PLATFORM_TOKEN 的调用方式继续可用。
+    python skills/hsy-shadow/bind.py --ticket
+
+无需交互终端。用户只需在独立浏览器登录并进入目标账套。捕获业务请求后自动提交至 https://ivanc.wang/data/v2/shadow/hsy/submit，完成页显示结果，stdout 输出一行 JSON。仅 status=ready 且包含 connection_id 表示完成。关闭窗口取消，10 分钟未获取会话则超时；浏览器与临时配置在结束后清理。
+
+票据模式固定首次进入的账套，不接收客户端 connection_id。续期目标由云端签发票据时固定。提交被拒绝时返回结构化状态，Agent 检查连接状态后决定是否重试。会话的 Bearer 和 Cookie 会发送给云端并用于该账套查询。业务密码只由用户在好生意网页输入。
+
+可设置 HSY_BROWSER_EXECUTABLE 复用同版本程序。独立普通启动使用 1280×900 窗口、回环 CDP 和默认上下文，实际浏览器版本不符时退出。兼容旧版 --existing、--platform-login 手动绑定，自动流程使用 --ticket。
+
+插件的本地 MCP 提供 hsy_binding_guide。宿主应将 .mcp.json 的插件根目录占位符解析为本地安装目录，也可配置 python 加 shadow_mcp.py 绝对路径。
+
+已有合法授权的本机 CDP 浏览器接入时，可运行 bind.py --ticket --existing，保留唯一目标好生意标签页，并在页面中打开只读业务页面触发请求。此模式不导航原页面、不关闭用户浏览器。普通浏览器或 WorkBuddy 浏览器工具不一定提供 CDP；其工具禁止导出凭据时，本插件不提供规避方法，使用用户明确授权的独立绑定客户端。票据只从子进程环境 HSY_BIND_TICKET 读取，缺失立即返回 ticket_missing。

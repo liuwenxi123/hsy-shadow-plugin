@@ -1,7 +1,9 @@
 ---
 name: hsy-shadow
-description: Bind or refresh the user's selected 好生意 ledger for cloud queries.
+description: Open local HSY login and automatically bind the selected ledger using a scoped ticket.
 ---
-用户要求绑定或更新好生意云端连接时，使用随包 bind.py。先说明云端在会话有效期内可代表该用户访问所选账套，请用户选择目标账套。优先运行 python bind.py --existing，在常见 Edge / Chrome 配置目录发现当前浏览器提供的本机调试入口；仅连接已有好生意页面。如果浏览器未提供入口，改用 python bind.py，打开独立 Chromium 153.0.8010.12 登录窗口。缺少浏览器时安装 playwright==1.63.0，再运行 python -m playwright install chromium。请用户完成登录、验证、选择一个账套，再打开商品分类等只读页面。云端固定为 https://ivanc.wang/data 。用户在本地交互终端选择账套序号，在选定页面触发只读请求，并核对账套地址、目标云和新建或续期的连接 ID 后亲自输入 YES。Agent 不得代输序号或 YES。平台密钥由本地环境 HSY_PLATFORM_TOKEN 提供，或在程序隐藏输入框输入。不要让用户在对话里提交会话或密钥。更新时传 --connection-id 本人原连接 ID；ready 后才报告成功。禁止扫描浏览器密码库、复制完整配置或打印请求头。
+用户要求绑定好生意时，先调用云端签发接口领取本人受限绑定票据。告知用户在独立浏览器登录并选择目标企业后，该账套会话将自动发送至 ivanc.wang 云平台供代查。本地运行 python bind.py --ticket，把票据经子进程环境 HSY_BIND_TICKET 传入。用户只操作网页登录，不要求终端确认或平台密码。Agent 不得输入业务密码或替用户选择企业。
+运行约 10 分钟内等待用户登录。插件固定首个进入的账套，自动捕获请求并提交。stdout 为 JSON，只有 status=ready 且带 connection_id 才报告成功。cancelled 表示关窗，timeout 表示未捕获；submit_failed 应先检查平台连接，避免盲目重复绑定。续期时由云端签发绑定原 connection_id 的票据，客户端不要附加 connection_id。
+浏览器固定 Chromium 153.0.8010.12，依赖安装命令为 python -m pip install playwright==1.63.0 requests psutil，再 python -m playwright install chromium。禁止扫描浏览器密码库、复制完整配置、输出请求头或持久化票据及会话。
 
-使用 python bind.py --platform-login 可在确认上传后，通过本地终端输入平台用户名与隐藏密码，取得本次导入授权。导入结束或失败均尝试退出本次平台登录；撤销未确认时终端提示检查。平台密码只发送到 https://ivanc.wang/auth/login，不应交给 Agent。已有 HSY_PLATFORM_TOKEN 的调用方式继续可用。
+已有合法授权的本机 CDP 浏览器接入时，可运行 bind.py --ticket --existing，保留唯一目标好生意标签页，并在页面中打开只读业务页面触发请求。此模式不导航原页面、不关闭用户浏览器。普通浏览器或 WorkBuddy 浏览器工具不一定提供 CDP；其工具禁止导出凭据时，本插件不提供规避方法，使用用户明确授权的独立绑定客户端。票据只从子进程环境 HSY_BIND_TICKET 读取，缺失立即返回 ticket_missing。

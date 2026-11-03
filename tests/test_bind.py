@@ -154,3 +154,111 @@ def test_rejected_platform_login(monkeypatch):
     with pytest.raises(SystemExit, match="平台登录失败"):
         bind.platform_login()
     assert post.call_count == 1
+
+
+def test_auto_submit_is_scoped(monkeypatch):
+    import auto_bind
+    from unittest.mock import MagicMock
+    import pytest
+    post = MagicMock(return_value=MagicMock(status_code=200, json=lambda: {
+        "status": "ready", "connection_id": "fixture-id", "secret": "must-not-return"}))
+    monkeypatch.setattr(auto_bind.requests, "post", post)
+    result = auto_bind.submit("fixture-ticket", {"provider": "hsy"})
+    assert result == {"status": "ready", "connection_id": "fixture-id"}
+    assert post.call_args.args[0] == "https://ivanc.wang/data/v2/shadow/hsy/submit"
+    assert post.call_args.kwargs["allow_redirects"] is False
+    post.return_value.status_code = 410
+    with pytest.raises(auto_bind.BindingStopped, match="ticket_expired"):
+        auto_bind.submit("fixture-ticket", {"provider": "hsy"})
+
+
+def test_auto_real_browser_popup_without_terminal(monkeypatch, capsys):
+    import auto_bind
+    import requests
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from unittest.mock import patch
+    from normal_chromium import normal_chromium_page
+
+    submitted = []
+    class Endpoint(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+        def do_POST(self):
+            submitted.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"status":"ready","connection_id":"fixture-id"}')
+    server = HTTPServer(("127.0.0.1", 0), Endpoint)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    original_post = requests.post
+    def local_post(url, **kwargs):
+        assert url == "https://ivanc.wang/data/v2/shadow/hsy/submit"
+        return original_post(f"http://127.0.0.1:{server.server_port}/", **kwargs)
+    monkeypatch.setattr(auto_bind.requests, "post", local_post)
+    monkeypatch.setenv("HSY_BIND_TICKET", "fixture-ticket")
+    monkeypatch.setattr("builtins.input", lambda _: (_ for _ in ()).throw(AssertionError("TTY used")))
+    first = "https://cloud1.chanjet.com/hsy/test/ledger1/"
+    from contextlib import contextmanager
+    @contextmanager
+    def browser(pw):
+        with normal_chromium_page(pw) as root:
+            def route_handler(route):
+                if route.request.url == bind.SITE:
+                    body = f"<a id=enter target=_blank href='{first}'>进入</a>"
+                else:
+                    body = """<script>setTimeout(()=>fetch('probe',{headers:{Authorization:'Bearer synthetic'}}),300)</script>"""
+                route.fulfill(body=body, content_type="text/html")
+            root.context.route("**/*", route_handler)
+            root.on("domcontentloaded", lambda: root.locator("#enter").click() if root.url == bind.SITE else None)
+            yield root
+    monkeypatch.setattr(auto_bind, "normal_chromium_page", browser)
+    try:
+        auto_bind.main()
+        assert json.loads(capsys.readouterr().out) == {"status":"ready","connection_id":"fixture-id"}
+        assert len(submitted) == 1
+        assert submitted[0]["business_url"] == first
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join()
+
+
+def test_auto_network_failure_is_not_retried(monkeypatch):
+    import auto_bind
+    import requests
+    import pytest
+    from unittest.mock import MagicMock
+    post = MagicMock(side_effect=requests.ConnectionError("synthetic"))
+    monkeypatch.setattr(auto_bind.requests, "post", post)
+    with pytest.raises(requests.ConnectionError):
+        auto_bind.submit("fixture-ticket", {})
+    assert post.call_count == 1
+
+
+def test_existing_auto_keeps_user_page(monkeypatch):
+    import auto_bind
+    import time
+    from normal_chromium import normal_chromium_page
+    first = "https://cloud1.chanjet.com/hsy/test/ledger1/"
+    with sync_playwright() as pw:
+        with normal_chromium_page(pw) as page:
+            page.context.route("**/*", lambda route: route.fulfill(body="<title>User page</title>"))
+            page.goto(first)
+            page.evaluate("""() => setTimeout(()=>fetch('probe', {
+                headers:{Authorization:'Bearer fixture'}}), 500)""")
+            result = auto_bind.capture_auto(page, time.monotonic()+5, attached=True)
+            assert result["business_url"] == first
+            assert page.url == first
+            assert not page.is_closed()
+            assert page.context.browser.is_connected()
+
+
+def test_missing_ticket_is_structured_failure(monkeypatch, capsys):
+    import auto_bind
+    import json
+    monkeypatch.delenv("HSY_BIND_TICKET", raising=False)
+    assert auto_bind.main() == 1
+    assert json.loads(capsys.readouterr().out)["status"] == "ticket_missing"

@@ -18,7 +18,7 @@ LEDGER = re.compile(r"(https://cloud[0-9]*\.chanjet\.com/hsy/[A-Za-z0-9]+/[A-Za-
 SITE = "https://hsy.chanjet.com/"
 
 
-def existing_page(pw):
+def existing_page(pw, interactive=True):
     for vendor in ("Microsoft/Edge", "Google/Chrome"):
         root = Path(os.environ["LOCALAPPDATA"]) / vendor / "User Data"
         try:
@@ -32,6 +32,8 @@ def existing_page(pw):
                  if p.url.startswith(SITE) or LEDGER.match(p.url)]
         if len(pages) == 1:
             return pages[0]
+        if pages and not interactive:
+            raise SystemExit("存在多个好生意页面，请只保留本次目标页面。")
         if pages:
             for index, page in enumerate(pages, 1):
                 match = LEDGER.match(page.url)
@@ -143,10 +145,21 @@ def platform_logout(tokens):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--ticket", action="store_true")
     parser.add_argument("--platform-login", action="store_true")
     parser.add_argument("--existing", action="store_true")
     parser.add_argument("--connection-id")
     args = parser.parse_args()
+    if args.ticket:
+        if args.platform_login or args.connection_id:
+            raise SystemExit("票据模式仅支持独立浏览器。")
+        from auto_bind import main as automatic_binding
+        try:
+            status = automatic_binding(existing=args.existing)
+        except (Exception, SystemExit):
+            print('{"status":"failed"}', flush=True)
+            status = 1
+        raise SystemExit(status)
     if not sys.stdin.isatty():
         raise SystemExit("需要用户在本地交互终端选择账套并确认。")
 
