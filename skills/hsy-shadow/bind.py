@@ -13,7 +13,7 @@ from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
 from normal_chromium import normal_chromium_page
 
-DEST = "https://134.175.43.116/data/v2/connections/session"
+DEST = "https://ivanc.wang/data/v2/connections/session"
 LEDGER = re.compile(r"(https://cloud[0-9]*\.chanjet\.com/hsy/[A-Za-z0-9]+/[A-Za-z0-9]+/)")
 SITE = "https://hsy.chanjet.com/"
 
@@ -114,8 +114,36 @@ def capture(root, attached):
         page.remove_listener("request", observe)
 
 
+def platform_login():
+    username = input("本人云平台用户名: ").strip()
+    password = getpass.getpass("本人云平台密码: ")
+    response = requests.post("https://ivanc.wang/auth/login",
+                             json={"username": username, "password": password, "audience": "data-service"},
+                             timeout=30, allow_redirects=False)
+    if response.status_code != 200:
+        raise SystemExit("平台登录失败，未上传会话。")
+    tokens = response.json()
+    if not all(isinstance(tokens.get(key), str) and tokens[key]
+               for key in ("access_token", "refresh_token")):
+        raise SystemExit("平台未返回有效登录授权。")
+    return tokens
+
+
+def platform_logout(tokens):
+    try:
+        response = requests.post("https://ivanc.wang/auth/logout",
+                                 headers={"Authorization": "Bearer " + tokens["access_token"]},
+                                 json={"refresh_token": tokens["refresh_token"]},
+                                 timeout=30, allow_redirects=False)
+        if response.status_code != 200 or response.json().get("ok") is not True:
+            raise ValueError("Logout unconfirmed")
+    except Exception:
+        print("临时平台登录撤销未确认，请在平台检查并退出该会话。", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--platform-login", action="store_true")
     parser.add_argument("--existing", action="store_true")
     parser.add_argument("--connection-id")
     args = parser.parse_args()
@@ -129,20 +157,27 @@ def main():
     print("账套:", payload["business_url"], "目的地:", DEST, "连接:", args.connection_id or "新建")
     if input("允许云端保存本次会话并代查此账套？输入 YES 确认: ").strip() != "YES":
         raise SystemExit("已取消，未上传。")
-    token = os.getenv("HSY_PLATFORM_TOKEN") or getpass.getpass("本人云平台访问密钥: ")
-    payload.update(provider="hsy", label="好生意影子连接")
-    if args.connection_id:
-        payload["connection_id"] = args.connection_id
-    response = requests.post(DEST, headers={"Authorization": "Bearer " + token},
-                             json=payload, timeout=45, allow_redirects=False)
-    if response.status_code != 200:
-        raise SystemExit(f"导入未确认成功，HTTP {response.status_code}。请先检查本人连接状态。")
-    result = response.json()
-    if result.get("status") != "ready" or not result.get("connection_id"):
-        raise SystemExit("云端未确认连接就绪。")
-    if args.connection_id and args.connection_id != result["connection_id"]:
-        raise SystemExit("云端返回了不同的连接 ID，请检查本人连接状态。")
-    print("ready", result["connection_id"])
+    tokens = platform_login() if args.platform_login else None
+    token = tokens["access_token"] if tokens else (
+        os.getenv("HSY_PLATFORM_TOKEN") or getpass.getpass("本人云平台访问密钥: "))
+    try:
+        payload.update(provider="hsy", label="好生意影子连接")
+        if args.connection_id:
+            payload["connection_id"] = args.connection_id
+        response = requests.post(DEST, headers={"Authorization": "Bearer " + token},
+                                 json=payload, timeout=45, allow_redirects=False)
+        if response.status_code != 200:
+            raise SystemExit(f"导入未确认成功，HTTP {response.status_code}。请先检查本人连接状态。")
+        result = response.json()
+        if result.get("status") != "ready" or not result.get("connection_id"):
+            raise SystemExit("云端未确认连接就绪。")
+        if args.connection_id and args.connection_id != result["connection_id"]:
+            raise SystemExit("云端返回了不同的连接 ID，请检查本人连接状态。")
+        print("ready", result["connection_id"])
+    finally:
+        if tokens:
+            platform_logout(tokens)
+
 
 
 if __name__ == "__main__":

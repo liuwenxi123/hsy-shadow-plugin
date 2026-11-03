@@ -115,3 +115,42 @@ def test_wrong_running_browser_rejected(monkeypatch):
         with pytest.raises(SystemExit, match="实际浏览器版本"):
             with launcher.normal_chromium_page(pw):
                 pytest.fail("Wrong browser version accepted")
+
+
+def test_platform_login_and_revoke_after_import_failure(monkeypatch):
+    from unittest.mock import MagicMock
+    import pytest
+    monkeypatch.setattr(sys, "argv", ["bind.py", "--existing", "--platform-login"])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(bind, "sync_playwright", MagicMock())
+    monkeypatch.setattr(bind, "existing_page", MagicMock())
+    monkeypatch.setattr(bind, "capture", lambda *args: {"business_url": "fixture"})
+    answers = iter(["YES", "fixture-user"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    monkeypatch.setattr(bind.getpass, "getpass", lambda _: "fixture-password")
+    responses = [
+        MagicMock(status_code=200, json=lambda: {"access_token": "access", "refresh_token": "refresh"}),
+        MagicMock(status_code=403),
+        MagicMock(status_code=200, json=lambda: {"ok": True}),
+    ]
+    post = MagicMock(side_effect=responses)
+    monkeypatch.setattr(bind.requests, "post", post)
+    with pytest.raises(SystemExit, match="HTTP 403"):
+        bind.main()
+    assert [c.args[0] for c in post.call_args_list] == [
+        "https://ivanc.wang/auth/login", bind.DEST, "https://ivanc.wang/auth/logout"]
+    assert post.call_args_list[0].kwargs["json"]["audience"] == "data-service"
+    assert post.call_args_list[2].kwargs["json"] == {"refresh_token": "refresh"}
+    assert all(c.kwargs["allow_redirects"] is False for c in post.call_args_list)
+
+
+def test_rejected_platform_login(monkeypatch):
+    from unittest.mock import MagicMock
+    import pytest
+    monkeypatch.setattr("builtins.input", lambda _: "fixture")
+    monkeypatch.setattr(bind.getpass, "getpass", lambda _: "fixture")
+    post = MagicMock(return_value=MagicMock(status_code=401))
+    monkeypatch.setattr(bind.requests, "post", post)
+    with pytest.raises(SystemExit, match="平台登录失败"):
+        bind.platform_login()
+    assert post.call_count == 1

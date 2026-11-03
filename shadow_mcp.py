@@ -13,8 +13,8 @@ def hsy_binding_guide() -> dict:
     return {
         "guide": (folder / "SKILL.md").read_text(encoding="utf-8"),
         "working_directory": str(folder),
-        "existing_session": ["python", "bind.py", "--existing"],
-        "interactive_login": ["python", "bind.py"],
+        "existing_session": ["python", "bind.py", "--existing", "--platform-login"],
+        "interactive_login": ["python", "bind.py", "--platform-login"],
         "refresh": "向所选命令追加 --connection-id 和用户本人的原连接 ID。",
         "success_condition": "本地程序收到云端 ready 并输出连接 ID。",
     }
